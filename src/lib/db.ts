@@ -1,10 +1,41 @@
 import { PGlite } from '@electric-sql/pglite';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { Crop, PlantDisease, DiseaseFilters, PaginatedResult, AuditLog } from './types';
+import { EMBEDDED_MIGRATIONS } from './embedded-migrations';
 
 let dbInstance: PGlite | null = null;
 let initialized = false;
+let initPromise: Promise<PGlite> | null = null;
+
+function resolveDatabasePath(): string | undefined {
+  // If running on Vercel, AWS Lambda, or any serverless runtime
+  const isServerless = Boolean(
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT ||
+    process.env.NOW_REGION
+  );
+
+  if (isServerless) {
+    return path.join('/tmp', '.db_pglite');
+  }
+
+  // Check if current directory is writable
+  try {
+    const localDir = path.join(process.cwd(), '.db_pglite');
+    if (fs.existsSync(localDir)) {
+      fs.accessSync(localDir, fs.constants.W_OK);
+      return localDir;
+    }
+    fs.accessSync(process.cwd(), fs.constants.W_OK);
+    return localDir;
+  } catch {
+    // Current working directory is read-only (EROFS) -> fallback to system temp dir
+    return path.join(os.tmpdir(), '.db_pglite');
+  }
+}
 
 // Ensure database instance is initialized and migrations are applied
 export async function getDb(): Promise<PGlite> {
@@ -12,28 +43,61 @@ export async function getDb(): Promise<PGlite> {
     return dbInstance;
   }
 
-  const dbPath = path.join(process.cwd(), '.db_pglite');
-  dbInstance = new PGlite(dbPath);
+  if (initPromise) {
+    return initPromise;
+  }
 
-  // Apply migrations if needed
-  await runMigrations(dbInstance);
-  initialized = true;
-  return dbInstance;
+  initPromise = (async () => {
+    const dbPath = resolveDatabasePath();
+
+    try {
+      if (dbPath) {
+        dbInstance = new PGlite(dbPath);
+        await dbInstance.waitReady;
+      } else {
+        dbInstance = new PGlite();
+        await dbInstance.waitReady;
+      }
+    } catch (err) {
+      console.warn('Failed to initialize PGlite with path, falling back to in-memory PGlite:', err);
+      dbInstance = new PGlite();
+      await dbInstance.waitReady;
+    }
+
+    // Apply migrations if needed
+    await runMigrations(dbInstance);
+    initialized = true;
+    return dbInstance;
+  })();
+
+  return initPromise;
 }
 
 export async function runMigrations(db: PGlite): Promise<void> {
+  // 1. Try disk migrations first if directory exists
   const migrationsDir = path.join(process.cwd(), 'supabase', 'migrations');
-  if (!fs.existsSync(migrationsDir)) return;
+  if (fs.existsSync(migrationsDir)) {
+    const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
+    if (files.length > 0) {
+      for (const file of files) {
+        const filePath = path.join(migrationsDir, file);
+        try {
+          const sql = fs.readFileSync(filePath, 'utf-8');
+          await db.exec(sql);
+        } catch (err: unknown) {
+          console.warn(`Migration ${file} notice:`, (err as Error).message);
+        }
+      }
+      return;
+    }
+  }
 
-  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
-
-  for (const file of files) {
-    const filePath = path.join(migrationsDir, file);
-    const sql = fs.readFileSync(filePath, 'utf-8');
+  // 2. Fallback to bundled embedded migrations (guaranteed to work in serverless/Vercel)
+  for (const m of EMBEDDED_MIGRATIONS) {
     try {
-      await db.exec(sql);
+      await db.exec(m.sql);
     } catch (err: unknown) {
-      console.warn(`Migration ${file} notice:`, (err as Error).message);
+      console.warn(`Embedded migration ${m.name} notice:`, (err as Error).message);
     }
   }
 }
