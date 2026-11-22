@@ -1,0 +1,26 @@
+{
+  "name": "KISHAN RAKSHAK AI | किसान रक्षक एआई",
+  "short_name": "KishanRakshak",
+  "description": "AI-Powered Smart Agro-Advisory, IMD Weather Warning & Plant Disease Diagnostic Lab for Indian Farmers",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#15803d",
+  "orientation": "portrait-primary",
+  "lang": "hi",
+  "categories": ["agriculture", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
